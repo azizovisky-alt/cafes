@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>بطاقة المقاهي المشتركة</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f1f5f2;--card:#fff;--text:#1d2b27;--main:#1f4d43;--accent:#e3a92f;--muted:#5c6b66;--line:#d5dfda}
+@media (prefers-color-scheme:dark){:root{--bg:#14201d;--card:#1c2d28;--text:#eef3f0;--main:#3a8a79;--muted:#a5b5af;--line:#2f443d}}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Cairo",Tahoma,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:640px;margin:0 auto;padding:20px 16px 40px}
+h1{margin:0;font-size:1.7rem;font-weight:900;color:var(--main)}
+h2{font-size:1.15rem;margin:24px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+.stamps{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line)}
+.dot.on{background:var(--accent);border-color:var(--accent)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select{font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+input.s{width:120px} .w{width:100%;margin-bottom:8px}
+button{font:inherit;font-weight:700;padding:10px 16px;border:0;border-radius:999px;background:var(--main);color:#fff;cursor:pointer}
+button.alt{background:var(--accent);color:#1d2b27}
+.msg{font-size:.9rem;color:var(--muted);min-height:1.4em;margin-top:6px}
+.badge{background:var(--accent);color:#1d2b27;border-radius:999px;padding:2px 12px;font-size:.85rem;font-weight:700}
+.scroll{overflow-x:auto} table{border-collapse:collapse;width:100%;font-size:.9rem}
+td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+</style>
+</head>
+<body>
+<main>
+  <h1>بطاقة المقاهي المشتركة</h1>
+  <div id="app">جاري التحميل…</div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL = 'https://giimpyugkzfydsfyvfig.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_LJMTr0Ojn1-dufC13WJWGg_en54sgUJ';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let me = null, isAdmin = false, cafes = [], cashiers = [], visits = [], redeems = [], email = '', step = 'email';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const say = (id, t) => { const e = $('m_' + id); if (e) e.textContent = t; };
+const ERR = { bad_code: 'الكود غير صحيح، أو تجاوزت 5 محاولات خاطئة. حاول بعد ساعة.', already_today: 'زيارتك اليوم مسجلة. المسموح زيارة واحدة يومياً.', no_reward: 'لا توجد مكافأة متاحة بعد.', login: 'سجّل الدخول أولاً.', duplicate: 'هذا الكود مستخدم.' };
+
+async function init() {
+  const { data } = await sb.auth.getSession();
+  me = data.session ? data.session.user : null;
+  sb.auth.onAuthStateChange((_e, s) => { me = s ? s.user : null; load(); });
+  load();
+}
+
+async function load() {
+  if (!me) return render();
+  cafes = (await sb.from('cafes').select('*').order('created_at')).data || [];
+  visits = (await sb.from('visits').select('*')).data || [];
+  redeems = (await sb.from('redeems').select('*')).data || [];
+  isAdmin = !!(await sb.from('admins').select('user_id').maybeSingle()).data;
+  if (isAdmin) cashiers = (await sb.from('cashiers').select('id,cafe_id,name,active')).data || [];
+  render();
+}
+
+function render() {
+  if (!me) {
+    $('app').innerHTML = '<div class="card"><b>تسجيل الدخول</b><div class="msg">' + (step === 'email' ? 'اكتب بريدك وسنرسل لك رمز دخول.' : 'أدخل الرمز المرسل إلى ' + esc(email)) + '</div>' +
+      (step === 'email' ? '<input class="w" id="em" type="email" placeholder="البريد الإلكتروني"><button onclick="sendCode()">أرسل الرمز</button>'
+                        : '<input class="w" id="tk" inputmode="numeric" placeholder="الرمز"><button onclick="verify()">دخول</button>') +
+      '<div class="msg" id="m_login"></div></div>';
+    return;
+  }
+  if (['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
+  const mv = visits.filter(v => v.customer_id === me.id), mr = redeems.filter(r => r.customer_id === me.id);
+  let h = '<div class="row" style="margin-top:8px"><span class="msg">' + esc(me.email || me.phone || '') + '</span><button class="alt" onclick="sb.auth.signOut()">خروج</button></div>';
+  h += '<h2>المقاهي المشتركة (' + cafes.length + ')</h2>';
+  if (!cafes.length) h += '<div class="card">لا توجد مقاهي بعد.</div>';
+  cafes.forEach(c => {
+    const n = mv.filter(v => v.cafe_id === c.id).length, used = mr.filter(r => r.cafe_id === c.id).length, avail = Math.floor(n / c.goal) - used, pos = n % c.goal;
+    let dots = ''; for (let i = 0; i < c.goal; i++) dots += '<span class="dot' + (i < pos ? ' on' : '') + '"></span>';
+    h += '<div class="card"><b>' + esc(c.name) + '</b> ' + (n === 0 ? '<span class="badge">خصم ترحيبي ' + c.welcome_pct + '%</span>' : '') +
+      '<div class="stamps">' + dots + '</div><div>زياراتك: ' + n + (avail > 0 ? ' · لديك ' + avail + ' مشروب مجاني 🎉' : '') + '</div>' +
+      '<div class="row" style="margin-top:8px"><input class="s" id="c_' + c.id + '" placeholder="كود الكاشير" inputmode="numeric">' +
+      '<button onclick="act(\'check_in\',\'' + c.id + '\')">سجّل زيارتي</button>' +
+      (avail > 0 ? '<button class="alt" onclick="act(\'redeem_reward\',\'' + c.id + '\')">استبدل المشروب</button>' : '') +
+      '</div><div class="msg" id="m_' + c.id + '"></div></div>';
+  });
+  if (isAdmin) {
+    h += '<h2>لوحة المسؤول</h2><div class="card"><b>إضافة مقهى</b><input class="w" id="nm" placeholder="اسم المقهى"><input class="w" id="cd" placeholder="كود المدير (4 أرقام فأكثر)" inputmode="numeric"><button onclick="addCafe()">أضف مقهى</button><div class="msg" id="m_add"></div></div>' +
+      '<div class="card"><b>أكواد الكاشيرات</b><select class="w" id="ck">' + cafes.map(c => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('') + '</select><input class="w" id="kn" placeholder="اسم الكاشير"><input class="w" id="kc" placeholder="كود الكاشير" inputmode="numeric"><button onclick="addCashier()">أضف كاشير</button><div class="msg" id="m_ck"></div>' +
+      cafes.map(c => '<div style="margin-top:8px"><b>' + esc(c.name) + '</b>: ' + cashiers.filter(k => k.cafe_id === c.id && k.name !== 'المدير').map(k => (k.active ? '' : '(موقوف) ') + esc(k.name) + ' (' + visits.filter(v => v.cafe_id === c.id && v.cashier_name === k.name).length + ') <a href="#" onclick="stopCashier(\'' + k.id + '\');return false">✕</a>').join('، ') + '</div>').join('') + '</div>' +
+      '<div class="card scroll"><table><tr><th>المقهى</th><th>الزيارات</th><th>زبائن</th><th>ترحيبي</th><th>مجاني</th><th></th></tr>' +
+      cafes.map(c => { const v = visits.filter(x => x.cafe_id === c.id); return '<tr><td>' + esc(c.name) + '</td><td>' + v.length + '</td><td>' + new Set(v.map(x => x.customer_id)).size + '</td><td>' + v.filter(x => x.welcome).length + '</td><td>' + redeems.filter(x => x.cafe_id === c.id).length + '</td><td><button class="alt" onclick="delCafe(\'' + c.id + '\')">إزالة</button></td></tr>'; }).join('') + '</table></div>';
+  }
+  $('app').innerHTML = h;
+}
+
+async function sendCode() {
+  email = $('em').value.trim();
+  const { error } = await sb.auth.signInWithOtp({ email });
+  if (error) return say('login', 'تعذر الإرسال: ' + error.message);
+  step = 'code'; render();
+}
+async function verify() {
+  const { error } = await sb.auth.verifyOtp({ email, token: $('tk').value.trim(), type: 'email' });
+  if (error) say('login', 'الرمز غير صحيح.'); else step = 'email';
+}
+async function act(fn, id) {
+  const { data, error } = await sb.rpc(fn, { p_cafe: id, p_code: $('c_' + id).value.trim() });
+  if (error || !data) return say(id, 'تعذر تنفيذ الطلب.');
+  if (!data.ok) return say(id, ERR[data.error] || 'خطأ.');
+  say(id, fn === 'check_in' ? (data.welcome ? 'تم! خصمك الترحيبي على هذه الزيارة.' : 'تم تسجيل زيارتك.') : 'تم استبدال المشروب المجاني.');
+  load();
+}
+async function addCafe() {
+  const name = $('nm').value.trim(), code = $('cd').value.trim();
+  if (!name || !/^\d{4,}$/.test(code)) return say('add', 'اكتب الاسم وكوداً من 4 أرقام فأكثر.');
+  const { error } = await sb.rpc('add_cafe', { p_name: name, p_code: code });
+  if (error) say('add', 'تعذرت الإضافة.'); else load();
+}
+async function addCashier() {
+  const name = $('kn').value.trim(), code = $('kc').value.trim();
+  if (!name || !/^\d{4,}$/.test(code)) return say('ck', 'اكتب اسماً وكوداً من 4 أرقام فأكثر.');
+  const { data, error } = await sb.rpc('add_cashier', { p_cafe: $('ck').value, p_name: name, p_code: code });
+  if (error || !data.ok) say('ck', ERR[data && data.error] || 'تعذرت الإضافة.'); else load();
+}
+async function stopCashier(id) { await sb.from('cashiers').update({ active: false }).eq('id', id); load(); }
+async function delCafe(id) { if (confirm('حذف المقهى وكل سجلاته نهائياً؟')) { await sb.from('cafes').delete().eq('id', id); load(); } }
+
+init();
+</script>
+</body>
+</html>
